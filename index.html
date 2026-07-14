@@ -134,7 +134,7 @@
 <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 <script>
 (function(){
-  // ========== ЛОКАЛЬНЫЙ СЛОВАРЬ (~2500 слов) ==========
+  // Локальный словарь (2500+ существительных)
   const LOCAL_DICT = new Set([
     "АБАЖУР","АБЗАЦ","АБОРДАЖ","АБРИКОС","АВАНГАРД","АВАРИЯ","АВГУСТ","АВТОБУС","АВТОМАТ","АВТОР",
     "АГЕНТ","АД","АДВОКАТ","АДРЕС","АЗАРТ","АЗБУКА","АИСТ","АКАДЕМИЯ","АКВАРЕЛЬ","АККОРД",
@@ -299,10 +299,9 @@
     "ЯСЛИ","ЯСТРЕБ","ЯХТА","ЯЧЕЙКА","ЯЧМЕНЬ","ЯЩЕРИЦА","ЯЩИК"
   ]);
 
-  // ========== КОНФИГУРАЦИЯ СЕРВЕРА ==========
   const PEER_CONFIG = { host: 'kvint-signal.onrender.com', port: 443, secure: true };
 
-  // ========== DOM элементы ==========
+  // DOM elements
   const $ = (sel) => document.querySelector(sel);
   const boardEl = $('#board');
   const messageEl = $('#message');
@@ -334,29 +333,17 @@
   const playersNeededSpan = $('#playersNeeded');
   const btnCopyId = $('#btnCopyId');
 
-  // ========== СОСТОЯНИЕ ==========
+  // Game state
   const BOARD_SIZE = 5;
-  let board = [];
-  let numPlayers = 2;
-  let currentPlayer = 0;
-  let scores = [];
-  let centerWord = '';
-  let newlyPlacedCell = null;
-  let pendingCell = null;
-  let gameStarted = false;
-  let gameOver = false;
-  let turnInProgress = false;
+  let board, numPlayers = 2, currentPlayer = 0, scores = [];
+  let centerWord = '', newlyPlacedCell = null, pendingCell = null;
+  let gameStarted = false, gameOver = false, turnInProgress = false;
   let highlightedPathCells = [];
-  let isNetwork = false;
-  let peer = null;
-  let connections = [];
-  let amHost = false;
-  let myPlayerIndex = 0;
+  let isNetwork = false, peer = null, connections = [], amHost = false, myPlayerIndex = 0;
 
   const playerColors = ['player-1','player-2','player-3','player-4'];
   const playerColorHex = ['#e74c3c','#3498db','#2ecc71','#f39c12'];
 
-  // ========== ИНИЦИАЛИЗАЦИЯ ДОСКИ ==========
   function initBoard(word) {
     board = Array.from({length: BOARD_SIZE}, () => Array(BOARD_SIZE).fill().map(() => ({letter:null, owner:null, preFilled:false})));
     const w = word.toUpperCase();
@@ -400,7 +387,6 @@
     }
   }
 
-  // ========== ВЫБОР КЛЕТКИ И БУКВЫ ==========
   function onCellClick(row, col) {
     if (gameOver || !gameStarted || turnInProgress) return;
     if (board[row][col].letter !== null) return;
@@ -444,7 +430,6 @@
     updatePlayerCards();
   }
 
-  // ========== ПОИСК ПУТИ ==========
   function findWordPath(word) {
     if (!newlyPlacedCell) return null;
     const w = word.toUpperCase();
@@ -487,7 +472,6 @@
     return null;
   }
 
-  // ========== ПРОВЕРКА СЛОВА ==========
   async function isWordValidOnline(word) {
     try {
       const url = `https://ru.wiktionary.org/w/api.php?action=query&format=json&titles=${encodeURIComponent(word)}&origin=*`;
@@ -504,9 +488,8 @@
     const path = findWordPath(raw);
     if (!path) return { ok: false, msg: 'Не удалось собрать слово по клеткам' };
 
-    if (LOCAL_DICT.has(raw)) {
-      return { ok: true, path, points: raw.length };
-    }
+    if (LOCAL_DICT.has(raw)) return { ok: true, path, points: raw.length };
+
     messageEl.innerHTML = '<span class="spinner"></span> Проверяем слово...';
     btnSubmit.disabled = btnPass.disabled = true;
     const valid = await isWordValidOnline(raw);
@@ -618,15 +601,11 @@
 
   function shake(el) { el.style.animation = 'shake 0.4s ease'; setTimeout(()=>el.style.animation='',400); }
 
-  // ========== КЛАВИАТУРА ==========
   const keyboardLayout = ['ЙЦУКЕНГШЩЗХЪ','ФЫВАПРОЛДЖЭ','ЯЧСМИТЬБЮЁ'];
   function buildKeyboard() {
     keyboardRows.innerHTML = keyboardLayout.map(row => {
-      const rowDiv = document.createElement('div');
-      rowDiv.className = 'keyboard-row';
-      rowDiv.innerHTML = row.split('').map(ch => `<button class="key-btn">${ch}</button>`).join('');
-      return rowDiv;
-    }).map(div => div.outerHTML).join('');
+      return `<div class="keyboard-row">${row.split('').map(ch => `<button class="key-btn">${ch}</button>`).join('')}</div>`;
+    }).join('');
     document.querySelectorAll('.key-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const r = parseInt(keyboardContainer.dataset.targetRow);
@@ -658,7 +637,6 @@
     if (isNetwork && amHost) broadcastState();
   });
 
-  // ========== СЕТЕВАЯ ИГРА ==========
   function broadcastState() {
     if (!amHost || !isNetwork) return;
     const state = { type:'state', board, scores, currentPlayer, gameOver, centerWord, numPlayers, turnInProgress, newlyPlacedCell, highlightedPathCells };
@@ -768,7 +746,6 @@
     }
   }
 
-  // ========== КНОПКИ УПРАВЛЕНИЯ ==========
   btnLocalMode.addEventListener('click', ()=>{
     isNetwork = false;
     btnLocalMode.classList.add('active'); btnNetworkMode.classList.remove('active');

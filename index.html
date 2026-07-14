@@ -301,7 +301,7 @@
 
   const PEER_CONFIG = { host: 'kvint-signal.onrender.com', port: 443, secure: true };
 
-  // DOM элементы
+  // DOM
   const $ = (sel) => document.querySelector(sel);
   const boardEl = $('#board');
   const messageEl = $('#message');
@@ -333,7 +333,7 @@
   const playersNeededSpan = $('#playersNeeded');
   const btnCopyId = $('#btnCopyId');
 
-  // Состояние игры
+  // Состояние
   const BOARD_SIZE = 5;
   let board, numPlayers = 2, currentPlayer = 0, scores = [];
   let centerWord = '', newlyPlacedCell = null, pendingCell = null;
@@ -640,8 +640,13 @@
   // СЕТЕВАЯ ЧАСТЬ
   function broadcastState() {
     if (!amHost || !isNetwork) return;
-    const state = { type:'state', board, scores, currentPlayer, gameOver, centerWord, numPlayers, turnInProgress, newlyPlacedCell, highlightedPathCells };
-    console.log('Отправка состояния:', state);
+    const state = {
+      type:'state',
+      board, scores, currentPlayer, gameOver, centerWord, numPlayers,
+      turnInProgress, newlyPlacedCell, highlightedPathCells,
+      gameStarted   // <-- теперь передаём
+    };
+    console.log('Broadcast state:', state);
     connections.forEach(conn => conn.send(state));
   }
 
@@ -691,15 +696,12 @@
         conn.metadata = { playerIndex: idx };
         connections.push(conn);
         conn.send({ type:'welcome', playerIndex:idx, numPlayers });
-        console.log('Отправлен welcome игроку', idx);
         playersNeededSpan.textContent = count - 1 - connections.length;
         if (connections.length === count - 1) {
-          console.log('Все подключились, начинаем игру');
           startNetworkGame();
         }
       });
       conn.on('data', data => {
-        console.log('Данные от клиента:', data);
         if (data.type==='move') handleNetworkMove(data);
       });
       conn.on('close', () => {
@@ -713,23 +715,18 @@
     amHost = false;
     peer = new Peer(PEER_CONFIG);
     peer.on('open', id => {
-      console.log('Клиент открыт, подключаемся к', hostId);
       const conn = peer.connect(hostId, {reliable:true});
       conn.on('open', () => {
-        console.log('Соединение установлено');
         connections = [conn];
         conn.on('data', data => {
-          console.log('Получены данные от хоста:', data);
           if (data.type==='welcome') {
             myPlayerIndex = data.playerIndex;
             numPlayers = data.numPlayers;
             console.log('Welcome: я игрок', myPlayerIndex+1);
           } else if (data.type==='state') {
-            console.log('Применяю состояние');
             applyState(data);
           } else if (data.type==='error') {
             messageEl.textContent = data.msg;
-            console.warn('Ошибка от хоста:', data.msg);
           }
         });
         conn.on('close', () => alert('Соединение с хостом потеряно.'));
@@ -759,8 +756,9 @@
     gameOver = state.gameOver; centerWord = state.centerWord; numPlayers = state.numPlayers;
     turnInProgress = state.turnInProgress; newlyPlacedCell = state.newlyPlacedCell;
     highlightedPathCells = state.highlightedPathCells || [];
+    gameStarted = state.gameStarted !== undefined ? state.gameStarted : true; // получаем флаг
 
-    // Показываем игру, если она скрыта (важно для клиента)
+    // Показываем игровое поле, если оно ещё скрыто
     if (gameArea.classList.contains('hidden')) {
       gameArea.classList.remove('hidden');
       document.querySelectorAll('.mode-select, #localPanel, #networkPanel').forEach(el => el.classList.add('hidden'));

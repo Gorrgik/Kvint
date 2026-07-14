@@ -68,6 +68,8 @@
         .winner-name { font-size:2rem; font-weight:900; background:linear-gradient(135deg,#e2b04a,#ffd700); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
         @keyframes shake { 0%,100%{transform:translateX(0);} 20%{transform:translateX(-8px);} 40%{transform:translateX(8px);} }
         .hidden { display: none !important; }
+        .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid #fff; border-radius: 50%; border-top-color: transparent; animation: spin 0.8s linear infinite; margin-right: 6px; }
+        @keyframes spin { to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
@@ -129,7 +131,6 @@
 </div>
 
 <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
-<script src="dictionary.js"></script>
 <script>
 (function() {
     // ---------- DOM ----------
@@ -163,21 +164,6 @@
     const createInfo = document.getElementById('createInfo');
     const roomIdSpan = document.getElementById('roomId');
     const playersNeededSpan = document.getElementById('playersNeeded');
-
-    // ---------- Словарь ----------
-    const DICTIONARY = new Set();
-    if (typeof window.dictionaryWords !== 'undefined' && Array.isArray(window.dictionaryWords)) {
-        window.dictionaryWords.forEach(w => {
-            const clean = w.toUpperCase().replace(/[^А-ЯЁ]/g, '');
-            if (clean.length >= 2) DICTIONARY.add(clean);
-        });
-        console.log('✅ Словарь загружен, слов:', DICTIONARY.size);
-    } else {
-        console.warn('⚠️ Файл dictionary.js не загружен. Используем резервный список.');
-        ['ДОМ','КОТ','ЛЕС','МИР','НОС','СЛОВО','БУКВА'].forEach(w => DICTIONARY.add(w));
-    }
-
-    const centerWordsList = ['СЛОВО','БУКВА','ДОСКА','ИГРОК','ГОРОД','КНИГА','РУЧКА','МЕСТО','КОШКА','МЫШКА'];
 
     // ---------- Состояние ----------
     const BOARD_SIZE = 5;
@@ -260,12 +246,13 @@
         if (gameOver || !gameStarted || turnInProgress) return;
         if (board[row][col].letter !== null) return;
         if (isNetwork && !amHost) {
-            // Клиент отправляет запрос хосту
             if (currentPlayer !== myPlayerIndex) {
                 messageEl.textContent = 'Сейчас не ваш ход.';
                 return;
             }
-            connections[0].send({ type: 'move', playerIndex: myPlayerIndex, action: 'placeLetter', payload: { row, col } });
+            // Клиент: показываем клавиатуру локально и отправим букву хосту
+            if (pendingCell) clearPendingCell();
+            showLetterInput(row, col);
             return;
         }
         // Локальная игра или хост
@@ -372,14 +359,63 @@
         return null;
     }
 
-    function checkWord(word) {
+    // Онлайн-проверка слова через Викисловарь
+    async function isWordValid(word) {
+        const url = `https://ru.wiktionary.org/w/api.php?action=query&format=json&titles=${encodeURIComponent(word)}&origin=*`;
+        try {
+            const res = await fetch(url);
+            const data = await res.json();
+            const pages = data.query.pages;
+            const pageId = Object.keys(pages)[0];
+            return pageId !== "-1"; // если страницы нет, id = "-1"
+        } catch (e) {
+            console.error('Ошибка проверки слова:', e);
+            return false; // считаем, что слово не найдено при ошибке сети
+        }
+    }
+
+    async function checkWord(word) {
         const raw = word.toUpperCase().replace(/[^А-ЯЁ]/g, '');
         if (raw.length < 3) return { ok: false, msg: 'Слово должно быть не короче 3 букв!' };
         if (raw === centerWord) return { ok: false, msg: 'Нельзя использовать центральное слово!' };
-        if (DICTIONARY.size > 0 && !DICTIONARY.has(raw)) return { ok: false, msg: `Слова "${raw}" нет в словаре.` };
         const path = findWordPath(raw);
         if (!path) return { ok: false, msg: `Не удалось собрать слово "${raw}" по соседним клеткам.` };
+
+        // Показываем индикатор проверки
+        const oldMsg = messageEl.textContent;
+        messageEl.innerHTML = '<span class="spinner"></span> Проверяем слово...';
+        btnSubmit.disabled = true;
+        btnPass.disabled = true;
+
+        const valid = await isWordValid(raw);
+        btnSubmit.disabled = false;
+        btnPass.disabled = false;
+
+        if (!valid) {
+            messageEl.textContent = `Слова "${raw}" нет в словаре. Попробуйте другое.`;
+            messageEl.className = 'message error';
+            return { ok: false, msg: 'Слово не найдено' };
+        }
         return { ok: true, path, points: raw.length };
+    }
+
+    async function handleSubmitWord() {
+        if (!turnInProgress || gameOver) return;
+        const word = wordInput.value.trim().toUpperCase().replace(/[^А-ЯЁ]/g, '');
+        if (isNetwork && !amHost) {
+            // Отправляем слово хосту
+            connections[0].send({ type: 'move', playerIndex: myPlayerIndex, action: 'submitWord', payload: { word } });
+            inputArea.classList.add('hidden');
+            messageEl.textContent = 'Ход отправлен, ожидайте подтверждения...';
+            return;
+        }
+        // Локально или хост
+        const check = await checkWord(word);
+        if (!check.ok) {
+            if (check.msg) { messageEl.textContent = check.msg; shake(wordInput); }
+            return;
+        }
+        applyWordResult(check.path, check.points);
     }
 
     function applyWordResult(path, points) {
@@ -486,7 +522,15 @@
                     const r = parseInt(keyboardContainer.dataset.targetRow);
                     const c = parseInt(keyboardContainer.dataset.targetCol);
                     if (!isNaN(r) && !isNaN(c) && pendingCell && pendingCell.row===r && pendingCell.col===c && board[r][c].letter===null) {
-                        placeLetter(r, c, ch);
+                        if (isNetwork && !amHost) {
+                            // Клиент отправляет букву хосту
+                            connections[0].send({ type: 'move', playerIndex: myPlayerIndex, action: 'placeLetter', payload: { row: r, col: c, letter: ch } });
+                            keyboardContainer.classList.add('hidden');
+                            pendingCell = null;
+                            messageEl.textContent = 'Буква отправлена хосту...';
+                        } else {
+                            placeLetter(r, c, ch);
+                        }
                     }
                 });
                 rowDiv.appendChild(btn);
@@ -510,33 +554,36 @@
         connections.forEach(conn => conn.send(state));
     }
 
-    function handleNetworkMove(data) {
+    async function handleNetworkMove(data) {
         if (!amHost) return;
         const { playerIndex, action, payload } = data;
         if (playerIndex !== currentPlayer) {
-            // Отправляем ошибку, если не его ход
             const conn = connections.find(c => c.metadata?.playerIndex === playerIndex);
             if (conn) conn.send({ type: 'error', msg: 'Сейчас не ваш ход.' });
             return;
         }
         if (action === 'placeLetter') {
-            const { row, col } = payload;
-            if (!board[row][col] || board[row][col].letter !== null) return;
-            // Ожидаем, что игрок пришлёт букву следующим действием? Нет, нужно, чтобы игрок прислал букву.
-            // Мы ожидаем, что после placeLetter игрок нажмёт клавишу на своей клавиатуре и пришлёт другой запрос.
-            // Пока просто разрешаем выбрать клетку и показываем клавиатуру хосту? Нет.
-            // Переделаем: клиент присылает сразу букву? Или двухэтапно.
-            // Упростим: клиент шлёт 'placeLetter' с буквой сразу, т.е. объединим выбор клетки и буквы.
-            // Пока оставим, но это не сработает. Нужно изменить логику: на клиенте при клике на клетку показывать клавиатуру локально и после выбора буквы слать хост 'placeLetterWithLetter'.
-            // Быстро исправим: в onCellClick для клиента будем показывать клавиатуру и после выбора отправлять.
+            const { row, col, letter } = payload;
+            if (board[row][col].letter !== null) return;
+            placeLetter(row, col, letter);
+            broadcastState();
+        } else if (action === 'submitWord') {
+            const { word } = payload;
+            const check = await checkWord(word);
+            if (!check.ok) {
+                const conn = connections.find(c => c.metadata?.playerIndex === playerIndex);
+                if (conn) conn.send({ type: 'error', msg: check.msg });
+                broadcastState(); // чтобы клиент обновил состояние (убрал индикатор)
+                return;
+            }
+            applyWordResult(check.path, check.points);
+            broadcastState();
+        } else if (action === 'pass') {
+            passTurnAction();
+            broadcastState();
         }
     }
 
-    // Переопределяем onCellClick для клиента, чтобы показывать клавиатуру локально и отправлять букву.
-    // Поэтому нужно сохранить оригинальную функцию и модифицировать.
-    // В текущей версии onCellClick уже переопределён, но некорректно. Исправим ниже.
-
-    // ---------- Инициализация сетевой игры ----------
     function setupHost(playerCount) {
         amHost = true;
         myPlayerIndex = 0;
@@ -549,7 +596,7 @@
         });
         peer.on('connection', (conn) => {
             conn.on('open', () => {
-                const idx = connections.length + 1; // 0 - хост
+                const idx = connections.length + 1;
                 conn.metadata = { playerIndex: idx };
                 connections.push(conn);
                 conn.send({ type: 'welcome', playerIndex: idx, numPlayers });
@@ -568,10 +615,7 @@
                 playersNeededSpan.textContent = numPlayers - 1 - connections.length;
             });
         });
-        peer.on('error', (err) => {
-            console.error('Ошибка Peer:', err);
-            alert('Ошибка соединения: ' + err);
-        });
+        peer.on('error', (err) => console.error('Ошибка Peer:', err));
     }
 
     function setupClient(hostId) {
@@ -597,14 +641,12 @@
                 conn.on('close', () => alert('Соединение с хостом потеряно.'));
             });
         });
-        peer.on('error', (err) => {
-            console.error('Ошибка Peer:', err);
-            alert('Ошибка подключения: ' + err);
-        });
+        peer.on('error', (err) => console.error('Ошибка Peer:', err));
     }
 
     function startNetworkGame() {
-        centerWord = centerWordsList[Math.floor(Math.random() * centerWordsList.length)];
+        const words = ['СЛОВО','БУКВА','ДОСКА','ИГРОК','ГОРОД','КНИГА','РУЧКА','МЕСТО','КОШКА','МЫШКА'];
+        centerWord = words[Math.floor(Math.random() * words.length)];
         initBoard(centerWord);
         scores = new Array(numPlayers).fill(0);
         currentPlayer = 0;
@@ -671,7 +713,8 @@
 
     btnStartLocal.addEventListener('click', () => {
         numPlayers = parseInt(playerCountSelect.value) || 2;
-        centerWord = centerWordsList[Math.floor(Math.random() * centerWordsList.length)];
+        const words = ['СЛОВО','БУКВА','ДОСКА','ИГРОК','ГОРОД','КНИГА','РУЧКА','МЕСТО','КОШКА','МЫШКА'];
+        centerWord = words[Math.floor(Math.random() * words.length)];
         initBoard(centerWord);
         scores = new Array(numPlayers).fill(0);
         currentPlayer = 0;
@@ -715,25 +758,7 @@
         setupClient(hostId);
     });
 
-    // Отправка слова и паса для клиента
-    btnSubmit.addEventListener('click', () => {
-        if (!turnInProgress || gameOver) return;
-        const word = wordInput.value.trim().toUpperCase().replace(/[^А-ЯЁ]/g, '');
-        if (isNetwork) {
-            if (amHost) {
-                const check = checkWord(word);
-                if (!check.ok) { messageEl.textContent = check.msg; shake(wordInput); return; }
-                applyWordResult(check.path, check.points);
-            } else {
-                connections[0].send({ type: 'move', playerIndex: myPlayerIndex, action: 'submitWord', payload: { word } });
-            }
-        } else {
-            const check = checkWord(word);
-            if (!check.ok) { messageEl.textContent = check.msg; shake(wordInput); return; }
-            applyWordResult(check.path, check.points);
-        }
-    });
-
+    btnSubmit.addEventListener('click', handleSubmitWord);
     btnPass.addEventListener('click', () => {
         if (!turnInProgress || gameOver) return;
         if (isNetwork) {
@@ -746,42 +771,7 @@
             passTurnAction();
         }
     });
-
     wordInput.addEventListener('keydown', (e) => { if (e.key==='Enter') { e.preventDefault(); btnSubmit.click(); } });
-
-    // Для клиента: перехватываем выбор буквы после клика по клетке (локально показываем клавиатуру)
-    const originalOnCellClick = onCellClick;
-    onCellClick = function(row, col) {
-        if (isNetwork && !amHost) {
-            if (currentPlayer !== myPlayerIndex) {
-                messageEl.textContent = 'Сейчас не ваш ход.';
-                return;
-            }
-            // Показываем клавиатуру локально
-            if (pendingCell) clearPendingCell();
-            showLetterInput(row, col);
-            // При выборе буквы отправим ход хосту
-            // Нужно переопределить обработчик клавиатуры для клиента, чтобы он слал 'placeLetterWithLetter'
-            // Временное решение: сохраним целевую клетку и при клике на букву отправим
-        } else {
-            originalOnCellClick(row, col);
-        }
-    };
-
-    // Модифицируем placeLetter для клиента, чтобы отправлять вместо локального размещения
-    const originalPlaceLetter = placeLetter;
-    placeLetter = function(row, col, letter) {
-        if (isNetwork && !amHost) {
-            // Отправляем хосту
-            connections[0].send({ type: 'move', playerIndex: myPlayerIndex, action: 'placeLetter', payload: { row, col, letter } });
-            // Локально ничего не делаем, ждём state
-            keyboardContainer.classList.add('hidden');
-            messageEl.textContent = 'Буква отправлена, ожидайте подтверждения...';
-            pendingCell = null;
-        } else {
-            originalPlaceLetter(row, col, letter);
-        }
-    };
 
     buildKeyboard();
 })();

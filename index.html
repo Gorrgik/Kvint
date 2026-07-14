@@ -76,13 +76,11 @@
 <div class="game-container" id="gameContainer">
     <h1>📝 Квинт</h1>
 
-    <!-- Выбор режима -->
     <div class="mode-select" id="modeSelect">
         <button class="mode-btn active" id="btnLocalMode">🏠 Локально</button>
         <button class="mode-btn" id="btnNetworkMode">🌐 Сетевая игра</button>
     </div>
 
-    <!-- Локальная панель -->
     <div id="localPanel" class="panel">
         <div style="display: flex; gap: 10px; align-items: center;">
             <label>Игроков:</label>
@@ -91,7 +89,6 @@
         </div>
     </div>
 
-    <!-- Сетевая панель -->
     <div id="networkPanel" class="panel hidden">
         <div id="networkCreate">
             <button class="btn btn-primary" id="btnCreateGame">📡 Создать игру</button>
@@ -107,7 +104,6 @@
         </div>
     </div>
 
-    <!-- Игровое поле (скрыто до старта) -->
     <div id="gameArea" class="panel hidden">
         <div class="board" id="board"></div>
         <div class="turn-indicator" id="turnIndicator">Ход: <span class="highlight" id="currentPlayerName"></span></div>
@@ -133,7 +129,7 @@
 <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 <script>
 (function() {
-    // ---------- DOM ----------
+    // DOM
     const modeSelect = document.getElementById('modeSelect');
     const btnLocalMode = document.getElementById('btnLocalMode');
     const btnNetworkMode = document.getElementById('btnNetworkMode');
@@ -165,7 +161,7 @@
     const roomIdSpan = document.getElementById('roomId');
     const playersNeededSpan = document.getElementById('playersNeeded');
 
-    // ---------- Состояние ----------
+    // Состояние
     const BOARD_SIZE = 5;
     let board = [];
     let numPlayers = 2;
@@ -187,13 +183,17 @@
     const playerColors = ['player-1','player-2','player-3','player-4'];
     const playerColorHex = ['#e74c3c','#3498db','#2ecc71','#f39c12'];
 
-    // ---------- Вспомогательные функции ----------
-    function getEmptyCells() {
-        const cells = [];
-        for (let r=0; r<BOARD_SIZE; r++) for (let c=0; c<BOARD_SIZE; c++) if (board[r][c].letter === null) cells.push({row:r, col:c});
-        return cells;
+    // Проверка слова через Викисловарь
+    async function isWordValid(word) {
+        const url = `https://ru.wiktionary.org/w/api.php?action=query&format=json&titles=${encodeURIComponent(word)}&origin=*`;
+        try {
+            const res = await fetch(url);
+            const data = await res.json();
+            const pages = data.query.pages;
+            const pageId = Object.keys(pages)[0];
+            return pageId !== "-1";
+        } catch (e) { return false; }
     }
-    function isBoardFull() { return getEmptyCells().length === 0; }
 
     function initBoard(word) {
         board = [];
@@ -246,16 +246,11 @@
         if (gameOver || !gameStarted || turnInProgress) return;
         if (board[row][col].letter !== null) return;
         if (isNetwork && !amHost) {
-            if (currentPlayer !== myPlayerIndex) {
-                messageEl.textContent = 'Сейчас не ваш ход.';
-                return;
-            }
-            // Клиент: показываем клавиатуру локально и отправим букву хосту
+            if (currentPlayer !== myPlayerIndex) return;
             if (pendingCell) clearPendingCell();
             showLetterInput(row, col);
             return;
         }
-        // Локальная игра или хост
         if (pendingCell) clearPendingCell();
         showLetterInput(row, col);
     }
@@ -264,7 +259,6 @@
         pendingCell = {row, col};
         keyboardContainer.classList.remove('hidden');
         messageEl.textContent = `Выберите букву для клетки (${row+1},${col+1})`;
-        messageEl.className = 'message info';
         keyboardContainer.dataset.targetRow = row;
         keyboardContainer.dataset.targetCol = col;
         renderBoard();
@@ -274,45 +268,36 @@
         pendingCell = null;
         keyboardContainer.classList.add('hidden');
         if (!turnInProgress) {
-            messageEl.textContent = isNetwork ? (amHost ? 'Ваш ход. Выберите клетку.' : 'Ожидайте своего хода.') : `Ход Игрока ${currentPlayer+1}. Кликните на пустую клетку.`;
-            messageEl.className = 'message info';
+            updateTurnMessage();
         }
         renderBoard();
     }
 
-    function cancelSelection() {
-        if (pendingCell) clearPendingCell();
+    function updateTurnMessage() {
+        const isMyTurn = (amHost && currentPlayer === 0) || (!amHost && myPlayerIndex === currentPlayer);
+        messageEl.textContent = isMyTurn ? 'Ваш ход! Выберите клетку.' : 'Ожидайте хода соперника.';
     }
 
-    function cancelPlacedLetter() {
-        if (!turnInProgress || !newlyPlacedCell) return;
-        board[newlyPlacedCell.row][newlyPlacedCell.col].letter = null;
-        board[newlyPlacedCell.row][newlyPlacedCell.col].owner = null;
-        newlyPlacedCell = null;
-        turnInProgress = false;
-        inputArea.classList.add('hidden');
-        messageEl.textContent = 'Буква отменена. Выберите клетку заново.';
-        messageEl.className = 'message info';
-        renderBoard();
-        if (isNetwork && amHost) broadcastState();
-    }
-
-    function placeLetter(row, col, letter) {
+    // Только меняет доску, не трогает UI
+    function applyPlaceLetter(row, col, letter) {
         board[row][col].letter = letter;
         board[row][col].owner = currentPlayer;
         board[row][col].preFilled = false;
         newlyPlacedCell = {row, col};
         turnInProgress = true;
         pendingCell = null;
+    }
+
+    // Полный цикл для локального игрока или хоста, когда ходит сам
+    function localPlaceLetter(row, col, letter) {
+        applyPlaceLetter(row, col, letter);
         keyboardContainer.classList.add('hidden');
         inputArea.classList.remove('hidden');
         wordInput.value = '';
         wordInput.focus();
         messageEl.textContent = `Буква "${letter}" размещена! Введите слово (мин. 3 буквы).`;
-        messageEl.className = 'message info';
         renderBoard();
         updatePlayerCards();
-        if (isNetwork && amHost) broadcastState();
     }
 
     function findWordPath(word) {
@@ -359,21 +344,6 @@
         return null;
     }
 
-    // Онлайн-проверка слова через Викисловарь
-    async function isWordValid(word) {
-        const url = `https://ru.wiktionary.org/w/api.php?action=query&format=json&titles=${encodeURIComponent(word)}&origin=*`;
-        try {
-            const res = await fetch(url);
-            const data = await res.json();
-            const pages = data.query.pages;
-            const pageId = Object.keys(pages)[0];
-            return pageId !== "-1"; // если страницы нет, id = "-1"
-        } catch (e) {
-            console.error('Ошибка проверки слова:', e);
-            return false; // считаем, что слово не найдено при ошибке сети
-        }
-    }
-
     async function checkWord(word) {
         const raw = word.toUpperCase().replace(/[^А-ЯЁ]/g, '');
         if (raw.length < 3) return { ok: false, msg: 'Слово должно быть не короче 3 букв!' };
@@ -381,8 +351,6 @@
         const path = findWordPath(raw);
         if (!path) return { ok: false, msg: `Не удалось собрать слово "${raw}" по соседним клеткам.` };
 
-        // Показываем индикатор проверки
-        const oldMsg = messageEl.textContent;
         messageEl.innerHTML = '<span class="spinner"></span> Проверяем слово...';
         btnSubmit.disabled = true;
         btnPass.disabled = true;
@@ -394,38 +362,20 @@
         if (!valid) {
             messageEl.textContent = `Слова "${raw}" нет в словаре. Попробуйте другое.`;
             messageEl.className = 'message error';
-            return { ok: false, msg: 'Слово не найдено' };
+            return { ok: false };
         }
         return { ok: true, path, points: raw.length };
-    }
-
-    async function handleSubmitWord() {
-        if (!turnInProgress || gameOver) return;
-        const word = wordInput.value.trim().toUpperCase().replace(/[^А-ЯЁ]/g, '');
-        if (isNetwork && !amHost) {
-            // Отправляем слово хосту
-            connections[0].send({ type: 'move', playerIndex: myPlayerIndex, action: 'submitWord', payload: { word } });
-            inputArea.classList.add('hidden');
-            messageEl.textContent = 'Ход отправлен, ожидайте подтверждения...';
-            return;
-        }
-        // Локально или хост
-        const check = await checkWord(word);
-        if (!check.ok) {
-            if (check.msg) { messageEl.textContent = check.msg; shake(wordInput); }
-            return;
-        }
-        applyWordResult(check.path, check.points);
     }
 
     function applyWordResult(path, points) {
         highlightedPathCells = path;
         scores[currentPlayer] += points;
-        renderBoard();
+        turnInProgress = false;
+        inputArea.classList.add('hidden');
         messageEl.textContent = `✅ Слово на ${points} очков! Игрок ${currentPlayer+1} +${points}.`;
         messageEl.className = 'message success';
-        inputArea.classList.add('hidden');
-        turnInProgress = false;
+        renderBoard();
+        updatePlayerCards();
         setTimeout(() => {
             highlightedPathCells = [];
             newlyPlacedCell = null;
@@ -439,8 +389,10 @@
     function passTurnAction() {
         messageEl.textContent = `😔 Игрок ${currentPlayer+1} пасует. 0 очков.`;
         messageEl.className = 'message info';
-        inputArea.classList.add('hidden');
         turnInProgress = false;
+        inputArea.classList.add('hidden');
+        renderBoard();
+        updatePlayerCards();
         setTimeout(() => {
             highlightedPathCells = [];
             newlyPlacedCell = null;
@@ -462,9 +414,7 @@
         keyboardContainer.classList.add('hidden');
         currentPlayerNameEl.textContent = `Игрок ${currentPlayer+1}`;
         currentPlayerNameEl.style.color = playerColorHex[currentPlayer];
-        const isMyTurn = (amHost && currentPlayer === 0) || (!amHost && myPlayerIndex === currentPlayer);
-        messageEl.textContent = isMyTurn ? 'Ваш ход! Выберите клетку.' : 'Ожидайте хода соперника.';
-        messageEl.className = 'message info';
+        updateTurnMessage();
         if (isNetwork && amHost) broadcastState();
         renderBoard();
         updatePlayerCards();
@@ -493,6 +443,7 @@
         }
         gameOverModal.innerHTML = `<h2>🏆 Игра окончена!</h2><div>${winnerHTML}</div><div>${list}</div><button class="btn btn-primary" onclick="location.reload()">🔄 Новая игра</button>`;
         gameOverOverlay.classList.remove('hidden');
+        if (isNetwork && amHost) broadcastState();
     }
 
     function updatePlayerCards() {
@@ -507,7 +458,7 @@
 
     function shake(el) { el.style.animation = 'shake 0.4s ease'; setTimeout(()=>el.style.animation='',400); }
 
-    // ---------- Клавиатура ----------
+    // Клавиатура
     const keyboardLayout = ['ЙЦУКЕНГШЩЗХЪ', 'ФЫВАПРОЛДЖЭ', 'ЯЧСМИТЬБЮЁ'];
     function buildKeyboard() {
         keyboardRows.innerHTML = '';
@@ -521,16 +472,15 @@
                 btn.addEventListener('click', () => {
                     const r = parseInt(keyboardContainer.dataset.targetRow);
                     const c = parseInt(keyboardContainer.dataset.targetCol);
-                    if (!isNaN(r) && !isNaN(c) && pendingCell && pendingCell.row===r && pendingCell.col===c && board[r][c].letter===null) {
-                        if (isNetwork && !amHost) {
-                            // Клиент отправляет букву хосту
-                            connections[0].send({ type: 'move', playerIndex: myPlayerIndex, action: 'placeLetter', payload: { row: r, col: c, letter: ch } });
-                            keyboardContainer.classList.add('hidden');
-                            pendingCell = null;
-                            messageEl.textContent = 'Буква отправлена хосту...';
-                        } else {
-                            placeLetter(r, c, ch);
-                        }
+                    if (isNaN(r) || isNaN(c) || !pendingCell || pendingCell.row!==r || pendingCell.col!==c || board[r][c].letter!==null) return;
+                    if (isNetwork && !amHost) {
+                        connections[0].send({ type: 'move', playerIndex: myPlayerIndex, action: 'placeLetter', payload: { row: r, col: c, letter: ch } });
+                        keyboardContainer.classList.add('hidden');
+                        pendingCell = null;
+                        messageEl.textContent = 'Буква отправлена хосту...';
+                    } else {
+                        localPlaceLetter(r, c, ch);
+                        if (isNetwork && amHost) broadcastState();
                     }
                 });
                 rowDiv.appendChild(btn);
@@ -539,11 +489,24 @@
         });
     }
 
-    btnCancelLetter.addEventListener('click', cancelSelection);
-    btnCancelPlaced.addEventListener('click', cancelPlacedLetter);
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { cancelSelection(); } });
+    btnCancelLetter.addEventListener('click', () => {
+        if (pendingCell) clearPendingCell();
+    });
 
-    // ---------- Сетевые функции ----------
+    btnCancelPlaced.addEventListener('click', () => {
+        if (!turnInProgress || !newlyPlacedCell) return;
+        board[newlyPlacedCell.row][newlyPlacedCell.col].letter = null;
+        board[newlyPlacedCell.row][newlyPlacedCell.col].owner = null;
+        newlyPlacedCell = null;
+        turnInProgress = false;
+        inputArea.classList.add('hidden');
+        messageEl.textContent = 'Буква отменена. Выберите клетку заново.';
+        renderBoard();
+        updatePlayerCards();
+        if (isNetwork && amHost) broadcastState();
+    });
+
+    // Сеть
     function broadcastState() {
         if (!amHost || !isNetwork) return;
         const state = {
@@ -565,15 +528,29 @@
         if (action === 'placeLetter') {
             const { row, col, letter } = payload;
             if (board[row][col].letter !== null) return;
-            placeLetter(row, col, letter);
+            applyPlaceLetter(row, col, letter);
             broadcastState();
+            // Обновляем свой UI (хост может быть не текущим игроком)
+            keyboardContainer.classList.add('hidden');
+            if (amHost && currentPlayer === 0) {
+                inputArea.classList.remove('hidden');
+                wordInput.value = '';
+                wordInput.focus();
+            } else {
+                inputArea.classList.add('hidden');
+            }
+            messageEl.textContent = `Игрок ${playerIndex+1} поставил букву "${letter}".`;
+            renderBoard();
+            updatePlayerCards();
         } else if (action === 'submitWord') {
             const { word } = payload;
             const check = await checkWord(word);
             if (!check.ok) {
                 const conn = connections.find(c => c.metadata?.playerIndex === playerIndex);
-                if (conn) conn.send({ type: 'error', msg: check.msg });
-                broadcastState(); // чтобы клиент обновил состояние (убрал индикатор)
+                if (conn) conn.send({ type: 'error', msg: check.msg || 'Ошибка слова' });
+                // Возвращаем состояние без изменений (убираем спиннер)
+                messageEl.textContent = check.msg || 'Ошибка';
+                broadcastState();
                 return;
             }
             applyWordResult(check.path, check.points);
@@ -592,7 +569,6 @@
         peer.on('open', (id) => {
             roomIdSpan.textContent = id;
             createInfo.classList.remove('hidden');
-            console.log('Комната создана, ID:', id);
         });
         peer.on('connection', (conn) => {
             conn.on('open', () => {
@@ -615,14 +591,13 @@
                 playersNeededSpan.textContent = numPlayers - 1 - connections.length;
             });
         });
-        peer.on('error', (err) => console.error('Ошибка Peer:', err));
+        peer.on('error', (err) => console.error('Peer error:', err));
     }
 
     function setupClient(hostId) {
         amHost = false;
         peer = new Peer({ secure: true, host: '0.peerjs.com', port: 443 });
         peer.on('open', (id) => {
-            console.log('Мой ID:', id);
             const conn = peer.connect(hostId, { reliable: true });
             conn.on('open', () => {
                 connections = [conn];
@@ -630,7 +605,6 @@
                     if (data.type === 'welcome') {
                         myPlayerIndex = data.playerIndex;
                         numPlayers = data.numPlayers;
-                        console.log('Подключён как игрок', myPlayerIndex+1);
                     } else if (data.type === 'state') {
                         applyState(data);
                     } else if (data.type === 'error') {
@@ -641,7 +615,7 @@
                 conn.on('close', () => alert('Соединение с хостом потеряно.'));
             });
         });
-        peer.on('error', (err) => console.error('Ошибка Peer:', err));
+        peer.on('error', (err) => console.error('Peer error:', err));
     }
 
     function startNetworkGame() {
@@ -681,10 +655,13 @@
             endGame();
             return;
         }
+        currentPlayerNameEl.textContent = `Игрок ${currentPlayer+1}`;
+        currentPlayerNameEl.style.color = playerColorHex[currentPlayer];
         const isMyTurn = (!amHost && myPlayerIndex === currentPlayer) || (amHost && currentPlayer === 0);
-        messageEl.textContent = isMyTurn ? 'Ваш ход! Выберите клетку.' : 'Ожидайте хода соперника.';
+        updateTurnMessage();
         if (isMyTurn && turnInProgress) {
             inputArea.classList.remove('hidden');
+            wordInput.value = '';
             wordInput.focus();
         } else {
             inputArea.classList.add('hidden');
@@ -692,7 +669,7 @@
         }
     }
 
-    // ---------- Обработчики кнопок ----------
+    // Обработчики режимов
     btnLocalMode.addEventListener('click', () => {
         isNetwork = false;
         btnLocalMode.classList.add('active');
@@ -729,7 +706,6 @@
         currentPlayerNameEl.textContent = 'Игрок 1';
         currentPlayerNameEl.style.color = playerColorHex[0];
         messageEl.textContent = `Центральное слово: "${centerWord}". Игрок 1, выберите клетку.`;
-        messageEl.className = 'message info';
         renderBoard();
         updatePlayerCards();
     });
@@ -758,22 +734,40 @@
         setupClient(hostId);
     });
 
-    btnSubmit.addEventListener('click', handleSubmitWord);
+    async function submitWordHandler() {
+        if (!turnInProgress || gameOver) return;
+        const word = wordInput.value.trim().toUpperCase().replace(/[^А-ЯЁ]/g, '');
+        if (isNetwork && !amHost) {
+            connections[0].send({ type: 'move', playerIndex: myPlayerIndex, action: 'submitWord', payload: { word } });
+            inputArea.classList.add('hidden');
+            messageEl.textContent = 'Ход отправлен, ожидайте...';
+            return;
+        }
+        const check = await checkWord(word);
+        if (!check.ok) {
+            if (check.msg) { messageEl.textContent = check.msg; shake(wordInput); }
+            return;
+        }
+        applyWordResult(check.path, check.points);
+        if (isNetwork && amHost) broadcastState();
+    }
+
+    btnSubmit.addEventListener('click', submitWordHandler);
     btnPass.addEventListener('click', () => {
         if (!turnInProgress || gameOver) return;
-        if (isNetwork) {
-            if (amHost) {
-                passTurnAction();
-            } else {
-                connections[0].send({ type: 'move', playerIndex: myPlayerIndex, action: 'pass' });
-            }
-        } else {
-            passTurnAction();
+        if (isNetwork && !amHost) {
+            connections[0].send({ type: 'move', playerIndex: myPlayerIndex, action: 'pass' });
+            inputArea.classList.add('hidden');
+            messageEl.textContent = 'Пас отправлен.';
+            return;
         }
+        passTurnAction();
+        if (isNetwork && amHost) broadcastState();
     });
     wordInput.addEventListener('keydown', (e) => { if (e.key==='Enter') { e.preventDefault(); btnSubmit.click(); } });
 
     buildKeyboard();
+    updatePlayerCards();
 })();
 </script>
 </body>

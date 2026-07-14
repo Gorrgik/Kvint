@@ -126,10 +126,18 @@
     </div>
 </div>
 
+<!-- Подключаем PeerJS (тот же пакет) -->
 <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 <script>
 (function() {
-    // DOM
+    // ⚙️ НАСТРОЙКА СЕРВЕРА — ваш Render-сервер
+    const PEER_SERVER = {
+        host: 'kvint-signal.onrender.com',
+        port: 443,
+        secure: true
+    };
+
+    // DOM-элементы
     const modeSelect = document.getElementById('modeSelect');
     const btnLocalMode = document.getElementById('btnLocalMode');
     const btnNetworkMode = document.getElementById('btnNetworkMode');
@@ -161,7 +169,7 @@
     const roomIdSpan = document.getElementById('roomId');
     const playersNeededSpan = document.getElementById('playersNeeded');
 
-    // Состояние
+    // Состояние игры
     const BOARD_SIZE = 5;
     let board = [];
     let numPlayers = 2;
@@ -192,9 +200,12 @@
             const pages = data.query.pages;
             const pageId = Object.keys(pages)[0];
             return pageId !== "-1";
-        } catch (e) { return false; }
+        } catch (e) {
+            return false;
+        }
     }
 
+    // Инициализация доски
     function initBoard(word) {
         board = [];
         for (let r=0; r<BOARD_SIZE; r++) {
@@ -267,9 +278,7 @@
     function clearPendingCell() {
         pendingCell = null;
         keyboardContainer.classList.add('hidden');
-        if (!turnInProgress) {
-            updateTurnMessage();
-        }
+        if (!turnInProgress) updateTurnMessage();
         renderBoard();
     }
 
@@ -278,7 +287,7 @@
         messageEl.textContent = isMyTurn ? 'Ваш ход! Выберите клетку.' : 'Ожидайте хода соперника.';
     }
 
-    // Только меняет доску, не трогает UI
+    // Поставить букву (только данные, UI не трогает)
     function applyPlaceLetter(row, col, letter) {
         board[row][col].letter = letter;
         board[row][col].owner = currentPlayer;
@@ -288,7 +297,7 @@
         pendingCell = null;
     }
 
-    // Полный цикл для локального игрока или хоста, когда ходит сам
+    // Локальная постановка буквы (для хоста или локальной игры)
     function localPlaceLetter(row, col, letter) {
         applyPlaceLetter(row, col, letter);
         keyboardContainer.classList.add('hidden');
@@ -300,6 +309,7 @@
         updatePlayerCards();
     }
 
+    // Поиск пути слова
     function findWordPath(word) {
         if (!newlyPlacedCell) return null;
         const w = word.toUpperCase();
@@ -344,6 +354,7 @@
         return null;
     }
 
+    // Проверка слова с онлайн-словарём
     async function checkWord(word) {
         const raw = word.toUpperCase().replace(/[^А-ЯЁ]/g, '');
         if (raw.length < 3) return { ok: false, msg: 'Слово должно быть не короче 3 букв!' };
@@ -420,6 +431,13 @@
         updatePlayerCards();
     }
 
+    function isBoardFull() {
+        for (let r=0; r<BOARD_SIZE; r++)
+            for (let c=0; c<BOARD_SIZE; c++)
+                if (board[r][c].letter === null) return false;
+        return true;
+    }
+
     function endGame() {
         gameOver = true;
         turnInProgress = false;
@@ -436,7 +454,9 @@
             if (scores[i] > maxScore) { maxScore = scores[i]; winners = [i]; }
             else if (scores[i] === maxScore) winners.push(i);
         }
-        let winnerHTML = winners.length === 1 ? `<span class="winner-name">Игрок ${winners[0]+1}</span> победил с ${maxScore} очками!` : `Ничья! Игроки ${winners.map(w=>w+1).join(' и ')} набрали по ${maxScore} очков.`;
+        let winnerHTML = winners.length === 1
+            ? `<span class="winner-name">Игрок ${winners[0]+1}</span> победил с ${maxScore} очками!`
+            : `Ничья! Игроки ${winners.map(w=>w+1).join(' и ')} набрали по ${maxScore} очков.`;
         let list = '';
         for (let i=0; i<numPlayers; i++) {
             list += `<div${winners.includes(i)?' style="font-weight:900;"':''}>Игрок ${i+1}: ${scores[i]} очков ${winners.includes(i)?'👑':''}</div>`;
@@ -506,7 +526,7 @@
         if (isNetwork && amHost) broadcastState();
     });
 
-    // Сеть
+    // ---------- СЕТЬ ----------
     function broadcastState() {
         if (!amHost || !isNetwork) return;
         const state = {
@@ -530,7 +550,6 @@
             if (board[row][col].letter !== null) return;
             applyPlaceLetter(row, col, letter);
             broadcastState();
-            // Обновляем свой UI (хост может быть не текущим игроком)
             keyboardContainer.classList.add('hidden');
             if (amHost && currentPlayer === 0) {
                 inputArea.classList.remove('hidden');
@@ -548,8 +567,6 @@
             if (!check.ok) {
                 const conn = connections.find(c => c.metadata?.playerIndex === playerIndex);
                 if (conn) conn.send({ type: 'error', msg: check.msg || 'Ошибка слова' });
-                // Возвращаем состояние без изменений (убираем спиннер)
-                messageEl.textContent = check.msg || 'Ошибка';
                 broadcastState();
                 return;
             }
@@ -565,7 +582,7 @@
         amHost = true;
         myPlayerIndex = 0;
         numPlayers = playerCount;
-        peer = new Peer({ secure: true, host: '0.peerjs.com', port: 443 });
+        peer = new Peer(PEER_SERVER);
         peer.on('open', (id) => {
             roomIdSpan.textContent = id;
             createInfo.classList.remove('hidden');
@@ -596,7 +613,7 @@
 
     function setupClient(hostId) {
         amHost = false;
-        peer = new Peer({ secure: true, host: '0.peerjs.com', port: 443 });
+        peer = new Peer(PEER_SERVER);
         peer.on('open', (id) => {
             const conn = peer.connect(hostId, { reliable: true });
             conn.on('open', () => {
@@ -669,7 +686,7 @@
         }
     }
 
-    // Обработчики режимов
+    // Переключение режимов
     btnLocalMode.addEventListener('click', () => {
         isNetwork = false;
         btnLocalMode.classList.add('active');
